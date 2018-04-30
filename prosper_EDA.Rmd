@@ -1,0 +1,1582 @@
+---
+title: "Exploratory Data Analysis of Prosper Loan Dataset"
+author: "Yasirah Krueng"
+output: html_document
+---
+
+# Abstract
+
+[Prosper](www.prosper.com/plp/about) is a peer-to-peer lending platform that allows people to invest in each
+other by connecting investors and borrowers through its service. 
+
+In this Exploratory Data Analysis, I explore a Prosper Loan dataset consist of more than 100,000 loans originated between 2006 and 2014. After performing a review of variables (there are 81 variables available), I listed a set of variables that fall into the scope of my investigation.
+
+I conducted this EDA with little to no knowledge about Prosper. Therefore, my EDA will focus on the get to know aspect of Prosper as a company (its history, borrower, and investor). I hope people who are new to peer-to-peer lending, either as a borrower or an investor, and want to know more about Prosper can benefit from this EDA.
+
+# Introduction
+
+## Global Settings 
+
+Below is the global setting used for R Markdown in this project:
+```{r setup}
+knitr::opts_chunk$set(echo = FALSE, 
+                      warning = FALSE, 
+                      message = FALSE,
+                      fig.width = 10,
+                      fig.height = 5)
+```
+
+## Packages
+
+The following R packages are also being used in this project:
+```{r echo=TRUE, packages}
+library(ggthemes)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+library(maps)
+library(mapproj)
+library(GGally)
+library(scales)
+```
+
+## Prosper Loan Dataset
+
+```{r, load_data}
+loan_data <- read.csv("prosperLoanData.csv")
+```
+
+Let's take a look at the dimension of the original dataset:
+```{r echo=TRUE, data_dimension}
+dim(loan_data)
+```
+As we can see, the dataset consists of 113,937 observations and 81 variables. Clearly, we would not be able to utilize all these variables at the same time. Instead, after conducting a quick review of their definition, I have chosen several variables that I want to focus on exploring. Furthermore, I have also combined some variables from the original dataset to defined some new variables.
+
+<!-- This part of the Wrangling Process won't be shown in the report --> 
+```{r, dataset_of_interest}
+# Create new dataframe with selected columns
+prosper <- 
+  loan_data %>% 
+  select(c(credit_grade = CreditGrade,
+           term = Term,
+           loan_status = LoanStatus,
+           closed_date = ClosedDate,
+           borrower_rate = BorrowerRate,
+           prosper_rating =ProsperRating..Alpha.,
+           listing_category = ListingCategory..numeric.,
+           borrower_state = BorrowerState,
+           occupation = Occupation,
+           credit_score_range_lower = CreditScoreRangeLower,
+           credit_score_range_upper =CreditScoreRangeUpper,
+           income_range = IncomeRange,
+           loan_original_amount = LoanOriginalAmount,
+           loan_origination_date = LoanOriginationDate,
+           customer_payments = LP_CustomerPayments,
+           customer_principal_payments = LP_CustomerPrincipalPayments,
+           interest_and_fees = LP_InterestandFees,
+           service_fee = LP_ServiceFees,
+           collection_fee = LP_CollectionFees,
+           gross_principal_loss = LP_GrossPrincipalLoss,
+           net_principal_loss = LP_NetPrincipalLoss,
+           non_principal_recovery_payments = LP_NonPrincipalRecoverypayments,
+           investors = Investors))
+```
+
+```{r, wrangling_risk_level}
+# According to variable definition, both CreditGrade and ProsperRating..Alpha. measure
+# delinquency risk of a loan using "AA" to "HR" values, as ordered below:
+ordered_risk_level = c("HR", "E", "D", "C", "B", "A", "AA")
+
+# Thus, I decided to join the two variables into one variable named RiskLevel.
+
+# First, handle NA value in ProsperRating..Alpha,
+prosper$prosper_rating <- as.character(prosper$prosper_rating)
+prosper$prosper_rating <- ifelse(is.na(prosper$prosper_rating),
+                                 "",
+                                 prosper$prosper_rating)
+
+# then andle NA value in CreditGrade.
+prosper$credit_grade <- as.character(prosper$credit_grade)
+prosper$credit_grade <- ifelse(is.na(prosper$credit_grade),
+                               "",
+                               prosper$credit_grade)
+
+# Unite both columns
+prosper <- unite(prosper,
+                 risk_level,
+                 c(credit_grade, prosper_rating),
+                 sep = "",
+                 remove = T)
+
+# Looking at the levels of CreditGrade, I found irregular values: "" and "NC". 
+# I decided to throw away those observation
+prosper <- prosper %>%
+  filter(risk_level != "",
+         risk_level != "NC")
+
+# Ordered factor
+prosper$risk_level <- factor(prosper$risk_level,
+                             levels = ordered_risk_level,
+                             ordered = T)
+```
+
+```{r, wrangling_term}
+# Set term as ordered factor instead of integer value
+prosper$term <- factor(prosper$term,
+                       levels = c(12, 36, 60),
+                       ordered = T)
+```
+
+```{r, wrangling_loan_status}
+# First, I decided to remove cancelled loans since they were never actually originated.
+prosper <- prosper %>%
+  filter(loan_status != "Cancelled")
+
+# Then, convert delinquency buckets into one
+prosper$loan_status <- as.character(prosper$loan_status)
+prosper$loan_status <- ifelse(grepl("Past Due", prosper$loan_status),
+                              "PastDue",
+                              prosper$loan_status)
+
+# Set LoanStatus type back to an ordered factor
+ordered_status = c("Current",
+                   "FinalPaymentInProgress",
+                   "PastDue",
+                   "Completed",
+                   "Defaulted",
+                   "Chargedoff")
+
+prosper$loan_status <- factor(prosper$loan_status,
+                                     ordered_status,
+                                     ordered = T)
+```
+
+```{r, wrangling_closed_date}
+# Format the date
+prosper$closed_date <- as.Date(prosper$closed_date,
+                               format="%Y-%m-%d")
+```
+
+```{r, wrangling_loan_origination_date}
+# Format the date
+prosper$loan_origination_date <- as.Date(prosper$loan_origination_date,
+                                         format="%Y-%m-%d")
+```
+
+```{r, wrangling_listing_category}
+# Category names ordered:
+ordered_category <- c("NA",
+                      "Debt Consolidation",
+                      "Home Improvement",
+                      "Business",
+                      "Personal Loan",
+                      "Student Use",
+                      "Auto",
+                      "Other",
+                      "Baby&Adoption",
+                      "Boat",
+                      "Cosmetic Procedure",
+                      "Engagement Ring",
+                      "Green Loans",
+                      "Household Expenses",
+                      "Large Purchases",
+                      "Medical/Dental",
+                      "Motorcycle",
+                      "RV",
+                      "Taxes",
+                      "Vacation",
+                      "Wedding Loans")
+
+# Map category numbers to category names.
+prosper$listing_category <- with(prosper,
+                                 ordered_category[listing_category+1])
+
+# set ListingCategory as ordered factor
+prosper$listing_category <- factor(prosper$listing_category,
+                                   levels = ordered_category)
+```
+
+```{r, wrangling_average_credit_score}
+# Add a column for average credit score:
+prosper <- mutate(prosper,
+                  average_credit_score = (credit_score_range_upper + credit_score_range_lower)/2)
+
+# Remove lower and upper credit scores:
+prosper <- prosper %>%
+  select(-c(credit_score_range_lower, credit_score_range_upper)) %>%
+  filter(!is.na(average_credit_score))
+```
+
+```{r, wrangling_income_range}
+# income range ordered:
+ordered_income <- c("Not displayed",
+                    "Not employed",
+                    "$0",
+                    "$1-24,999",
+                    "$25,000-49,999",
+                    "$50,000-74,999",
+                    "$75,000-99,999",
+                    "$100,000+")
+
+# order income range
+prosper$income_range <- factor(prosper$income_range,
+                               levels = ordered_income,
+                               ordered = T)
+```
+
+```{r, wrangling_average_investment_amount}
+# formulate average investment amount
+prosper <- mutate(prosper,
+                  average_investment_amount = loan_original_amount/investors)
+```
+
+```{r, wrangling_return_on_investment}
+# create function to calculate Return on Investment.
+calculate_return_on_investment <- function(loan_amount,
+                                           payments,
+                                           principal_payments,
+                                           service_fee,
+                                           collection_fee,
+                                           net_principal_loss,
+                                           non_principal_recovery){
+  
+  # principal collected in charged off
+  recovered_principal <- 
+    loan_amount - 
+    principal_payments -
+    net_principal_loss
+  
+  gain <-
+    payments +
+    service_fee +
+    collection_fee +
+    recovered_principal +
+    non_principal_recovery
+  
+  return(round((gain - loan_amount)/loan_amount, digits = 2))
+  }
+
+# add RoI variable to the data frame
+prosper <- 
+  mutate(prosper,
+         return_on_investment = 
+           ifelse(is.na(closed_date),
+                  0,
+                  calculate_return_on_investment(
+                    loan_amount = loan_original_amount,
+                    payments = customer_payments,
+                    principal_payments = customer_principal_payments,
+                    service_fee = service_fee,
+                    collection_fee = collection_fee,
+                    net_principal_loss = net_principal_loss,
+                    non_principal_recovery = non_principal_recovery_payments)))
+```
+
+```{r, wrangling_loss_rate}
+# create a function to calculate LossRate
+calculate_loss_rate <- function(loan_amount,
+                                net_principal_loss){
+  return (net_principal_loss/loan_amount)}
+
+# add LossRate variable to the data frame
+prosper <- 
+  mutate(prosper,
+         loss_rate = calculate_loss_rate(loan_amount = loan_original_amount,
+                                         net_principal_loss = net_principal_loss))
+```
+
+```{r, remove_unused_columns}
+# remove columns that are no longer relevant
+prosper <-
+  prosper %>%
+  select(c(-customer_payments,
+           -customer_principal_payments,
+           -interest_and_fees,
+           -service_fee,
+           -collection_fee,
+           -gross_principal_loss,
+           -net_principal_loss,
+           -non_principal_recovery_payments,
+           -investors))
+```
+<!-- End of wrangling process -->
+
+Here is the current dataset structure used in the EDA:
+```{r echo = TRUE}
+str(prosper)
+```
+Surely, after the wrangling process, we are left with less observation from the original dataset. Currently we have 113,081 observations. Furthermore, there are 10 variables taken directly from the original dataset, and 5 others defined from a combination of variables from the original dataset. Below are a short definition of each variable names.
+
+* Risk Level: the credit rating that was assign at the listing went live. For loans originated after July 2009, their Risk Levels were taken from ProsperRating (alpha), while other loans got their Risk Levels from CreditGrade.
+* Term : the length of the loan expressed in months.
+* Loan Status : the current status of the loan: ChargedOff, Completed, Current, Defaulted, FinalPaymentInProgress, and PastDue.
+* Closed Date: closed date is applicable for Completed, ChargedOff, and Defaulted loan statuses.
+* Borrower Rate: the borrower's interest rate for this loan.
+* ListingCategory: the category of the listing that the borrower selected when posting their listing.
+* Borrower State: two letter abbreviation of the state of the address of the borrower at the time the Listing was created.
+* Occupation: the occupation selected by the borrower at the time they created the listing.
+* Income Range: the income range of the borrower at the time the listing was created.
+* Loan Original Amount: the origination amount of the loan.
+* Loan Origination Date: the date the loan was originated.
+* Average Credit Score: the average between CreditScoreRangeLower and CreditScoreRangeUpper.
+* Average Investment Amount: the average investment amount between investors who invested in the loan, which is the LoanOriginalAmount divided by Investors.
+* Return on Investment: the return on investment value, which is lender's net profit divided by LoanOriginalAmount. 
+* Loss Rate: the loss rate on principal, which is LP_NetPrincipallLoss divided by LoanOriginalAmount.
+
+# Exploratory Data Analysis
+
+## Univariate Data Analysis
+
+Since we're dealing with several years worth of data, the first thing I'll do is to check the time period in which these loans were originated:
+
+```{r, display_loan_origination_period}
+loan_period <- range(prosper$loan_origination_date)
+paste("Loan Origination Period:", loan_period[1], "to", loan_period[2])
+```
+Looking at these dates, I wonder why did the loan origination date start only from April 21, 2006, and end on March 12, 2014, instead of started at the beginning of 2006 and ended at the end of 2014? Out of curiosity, I decided to conduct an online search about [Prosper](https://en.wikipedia.org/wiki/Prosper_Marketplace), and as a result, I found out that the company was founded in 2005, in California, and not until February 5, 2006, did they open their marketplace to the public. Therefore, it is reasonable enough to have their first loan only originated on April 21 that year. However, I didn't find anything particular about the upper bound date. I think, that might just be the latest data available at the time the dataset was acquired for this project.
+
+Going forward in this analysis, we need to recognize that, when comparing data over the year, data for 2006 and 2014 are not complete.
+
+### Annual Loan Origination Count
+
+Now let us see the annual loan origination count time series:
+
+```{r, adding_column_loan_origination_year}
+# Add new column for loan origination year
+prosper <- mutate(prosper,
+                  loan_origination_year = format(loan_origination_date,
+                                                 "%Y"))
+```
+
+```{r, reshaping_loan_count_by_year}
+# Reshape to get loan count by year
+loan_count_by_year <- prosper %>%
+  group_by(loan_origination_year) %>%
+  summarise(count = n())
+```
+
+```{r, plot_loan_count_by_year}
+# Plot the number of loan originated over the year
+ggplot(prosper,
+       aes(loan_origination_year))+
+  geom_bar(fill="#1f78b4")+
+  geom_text(data = loan_count_by_year, aes(y=count, label=comma_format()(count)), vjust=-.4)+
+  theme_economist()+
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank())+
+  labs(title = "Annual Loan Origination Count")+
+  xlab("Origination Year")
+```
+
+We can see that Prosper originated 5,239 loans in their first year in 2006, then double up the count in 2007. However, business was stagnant in 2008, and the final count was flat at 11,551 count. Suddenly, in 2009, the company went downhill, and the marketplace only able to originate 1,989 loans. It took Prosper about two years to reach an annual loan origination count higher than the 10,000 mark again. Since then, the graph suggests that Prosper have recovered, and the loan origination count has increased steadily, reaching 34,345 loans in 2013.
+
+In 2014, although loan count appears to have declined, but we already know that we only have data for the first three months (first quarter) of 2014. If Prosper were able to originate the same number of loans as they did in the first quarter of that year, for each remaining quarters, they should be able to close the year originating around 48,000 loans; a higher number than the annual loan origination count for 2013.
+
+However, an interesting insight from this graph actually came from the sharp decline in the 2009 annual loan origination count from the previous year number. Of course, the first possible explanation arise from the time when the incident happened, which coincided with the [global financial crisis](https://en.wikipedia.org/wiki/Financial_crisis_of_2007%E2%80%932008) of 2007-2008. Reasonably enough, one might asked: could the crisis caused a slowing down in the marketplace? To answer this question, let us investigate the distribution further:
+
+```{r, plot_loan_count_by_date}
+ggplot(prosper,
+       aes(loan_origination_date))+
+  geom_histogram(binwidth = 7, 
+                 fill="#1f78b4")+
+  theme_economist()+
+  xlab("Origination Date")+
+  ylab("Count")+
+  labs(title="Weekly Loan Origination Count")
+```
+
+Notice the gap between late 2008 to mid 2009. Obviously, this is not what I expected to see as an indication of a slowing down in the marketplace. I anticipated a low loan origination count in this period, but the graph shows zero counts instead; suggesting not a slowing down, but as if Prosper had temporarily stopped doing business at all. Surely, there must be an exceptional event, beyond the global financial crisis, that was more specific to the company itself, that caused this quiet period. It is the time to do another online research again.
+
+### Prosper 1.0 vs Prosper 2.0
+
+The online research revealed that on November 24, 2008, the U.S. Securities and Exchange Commission (SEC) imposed a [cease and desist order on Prosper](https://www.google.com/url?q=https%3A%2F%2Fwww.p2p-banking.com%2Fservices%2Fprosper-sec-orders-prosper-to-cease-and-desist%2F), and required Prosper to register its business under the Security Act. Apparently, Prosper spent months to complete the registration, during which it temporarily stopped giving new loans. Upon its comeback from the quiet period, Prosper introduced some changes to its business model, and rebranded the new era as Prosper 2.0. Subsequently, the period prior to the pre-registration is later known as Prosper 1.0.
+
+Since we've unexpectedly learned a general history of Prosper just by examining the histogram of its annual loan origination count, I think the histogram deserved to be displayed as the first final plot in this EDA. I will add another aesthetic to the plot to depict additional information to the final version. Additionally, moving forward in this Exploratory Data Analysis, I will focus my analysis on comparing between Prosper 1.0 and Prosper 2.0, to see the transformation of the company as it grows over the years, and to hopefully determine which one of them performed better than the other.
+
+```{r, adding_column_loan_origination_period}
+# For easy analysis, create a new column to record origination period of each loan
+prosper$loan_origination_period <-
+  ifelse(prosper$loan_origination_date > as.Date("2009-07-31"),
+         "Prosper 2.0",
+         "Prosper 1.0")
+# Ordered Factor
+prosper$loan_origination_period <-
+  factor(prosper$loan_origination_period,
+         levels = c("Prosper 1.0", "Prosper 2.0"),
+         ordered = T)
+```
+
+### Loan Terms
+
+Now let us see the options that borrowers have in regard to loan terms:
+```{r, plot_loan_term}
+ggplot(prosper,
+       aes(term))+
+  geom_bar(fill="#1f78b4")+
+  facet_wrap(~loan_origination_period)+
+  xlab("Term")+
+  ylab("Count")+
+  theme_economist()
+```
+```{r, summary_term}
+by(prosper$term, prosper$loan_origination_period,summary)
+```
+
+Apparently, the only option available for Prosper 1.0 was the 36-month loan term. The 12-month, and the 60-month loan terms only available for Prosper 2.0, though the 36-month loan term was still an option too. In fact, the 36-month loan was the most popular option in this later period (58,679 count), followed by the 60-month loan (24,545 count), and 12-month loan (1,613 count). 
+
+Unfortunately, since the 12-month and the 60-month loan terms were not available for Prosper 1.0, then I would not be able to make a comparison between these two periods for the 12-month and the 60-month loans terms. Therefore, moving forward in this EDA, I will focus my analysis only on the 36-month loans, the only type available for both Prosper 1.0 and Prosper 2.0; the two periods that I want to compare. I will revisit this loan term issue again in bivariate analysis to see the exact timeline of when these options became available.
+
+```{r, adding_dataframe_prosper_36}
+# new data frame for 36 month loans only
+prosper_36 <- prosper %>%
+  filter(prosper$term == "36")
+```
+
+### Loan Original Amount
+
+Now let us analyse how much money the borrowers lent in each loan:
+```{r, plot_loan_original_amount_by_period}
+ggplot(prosper_36,
+       aes(loan_original_amount))+
+  geom_histogram(binwidth = 1000, 
+                 fill="#1f78b4", 
+                 color="black") +
+  facet_wrap(~loan_origination_period)+
+  theme_economist()+
+  xlab("Loan Original Amount")+
+  ylab("Count")+
+  theme(legend.position = "none")
+```
+```{r, summary_loan_original_amount}
+by(prosper_36$loan_original_amount, prosper_36$loan_origination_period, summary)
+```
+
+Both periods appear to have a positively skewed distribution on loan original amount, suggesting that most borrowers were taking smaller loans. Apparently, the minimum loan amount was $1,000 for both periods, but the maximum loan amount does seem to have increased from $25,000 in the earlier version to $35,000 some time during the latest version. As expected, the mean, as well as the median, and the first and third quartiles, of loan original amount in Prosper 2.0 are higher than they are in Prosper 1.0; suggesting borrowers in Prosper 2.0 might have taken slightly higher loan than those in earlier period. Additionally, I also notice the spikes around values, such as around: $10,000, $15,000, $20,000, and even $30,000 and $35,000 in Prosper 2.0. I assume that it is an indication of borrowers rounding up, or estimating the amount of money they need to lend, instead of requesting the exact amount to the dollar.
+
+#### Average Investment Amount
+
+Now let's see how the investors invested their money between the two periods:
+```{r, plot_average_investment_amount}
+ggplot(prosper_36 %>%
+       filter(average_investment_amount > 0),
+       aes(average_investment_amount))+
+  geom_histogram(boundary = 0, binwidth = 100, fill="#1f78b4")+
+  facet_wrap(~loan_origination_period)+
+  theme_economist()+
+  theme(legend.position = "none")+
+  xlab("Investment Amount")+
+  ylab("Count")+
+  xlim(c(0,10000))
+```
+```{r, summary_average_investment_amount}
+by(prosper_36$average_investment_amount, prosper_36$loan_origination_period, summary)
+```
+
+Note that, for better visualization, the histogram above only shows investment amount of $10,000 or less.
+
+Both periods have a positively skewed distribution on investment amount, suggesting that most investments were in a smaller amount, especially in Prosper 1.0. As we can see from the summary above, 75% loans in the first period have an average investment amount of $92 or less, while half loans in the second period have an average investment amount of $125 or more. Moreover, 25% loans in Prosper 2.0 have an average investment amount of $4,000 or more.  Clearly, investors in Prosper 2.0 does seem to be more confident investing in larger amount per loan than those in Prosper 1.0. 
+
+Furthermore, the histogram of Prosper 2.0 shows spikes at around $4,000, and $10,000 depicting the popular higher investment amount. Not shown in the graph though, some investors in Prosper 2.0 went as high as investing $35,000 in a single loan, while the largest investment in a single loan in Prosper 1.0 was only $25,000. Remember, these are in fact, the maximum loan amount allowed in each periods.
+
+### Risk Level
+
+As a background, Risk Level is a measure of risk for a borrower to go default on the loan. Obviously, there is no straightforward formula to calculate the risk, and over time, a company, such as Prosper, is bound to update its calculation method to better reflect the risk. For example, Prosper did introduce a new grading system for its risk calculation at the beginning of Prosper 2.0. They named the current rating method as Prosper Rating. Previously, they used a different approach to determine the risk, and called it Credit Grade. Since both Prosper Rating and Credit Grade measure the same risk and use the same measurement values (AA to HR), so I joined them together in one variable named Risk Level.
+
+```{r, plot_risk_level}
+ggplot(prosper_36,
+       aes(risk_level,
+           fill = loan_origination_period))+
+  geom_bar(position = "dodge")+
+  scale_fill_manual(values = c("#d95f02", "#1f78b4"))+
+  theme_economist()+
+  labs(fill = "Origination Period")+
+  xlab("Risk Level")+
+  ylab("Count")+
+  theme(legend.position = "right")
+```
+```{r, summary_risk_level}
+by(prosper_36$risk_level, prosper_36$loan_origination_period, summary)
+```
+
+Now, notice how Risk Level is normally distributed during Prosper 1.0, with Grade C was having the highest count (5,556), followed by grade D (5,077 count) and B (4,312 count). However, in Prosper 2.0, grade A was the one having the highest count (10,662), which is, of course, more favorable to lenders because this group consist of highly reliable borrowers. However, Grade AA in the second period has the lowest count (4,487), and I wonder why? Could it be as a result of the newly implemented stricter grading system in this period? We will come back to this later.
+
+### Average Credit Score
+
+Credit Score is an alternate method of measuring the risk of a borrower to go default on a loan. The term Average Credit Score that is being used in this EDA means that this value is an average number of the highest and the lowest credit scores of the borrower, taken from different credit agencies. Furthermore, since credit score measures creditworthiness of a borrower, expect this number to be one of the many factors that affect Risk Level. 
+
+So, let us review the distribution:
+
+```{r, plot_average_credit_score}
+ggplot(prosper_36 %>%
+         filter(average_credit_score >0),
+       aes(average_credit_score))+
+  geom_histogram(boundary = 600, 
+                 binwidth = 25, 
+                 fill="#1f78b4",
+                 color="black")+
+  xlim(c(350,850))+
+  facet_wrap(~loan_origination_period)+
+  theme_economist()+
+  xlab("Average Credit Score")+
+  ylab("Count")+
+  theme(legend.position = "none")
+```
+```{r, summary_average_credit_score}
+by(prosper_36$average_credit_score, prosper_36$loan_origination_period, summary)
+```
+
+Please note that for a better display purpose, I have ignored few lower outliers in Prosper 1.0. 
+
+It's easy to notice the obvious difference in the lower bound between the two groups as an indication of the implementation of minimum credit score requirement during Prosper 2.0. Notice that half of the loans in Prosper 1.0 were from a borrower with an average credit score of less than 650, while about 75% of loans in Prosper 2.0 were from a borrower with an average credit score of higher than 650. In fact, the minimum average credit score in this period is 609.5. 
+
+Obviously, one might asked, did the minimum credit score requirement affect the loan origination count? Well, later on, in this EDA, we will return to the issue of minimum credit score requirement, and elaborate on the reason for and the probable impact of its implementation. Also, we will explore its possible impact on investor's confidence on lending at Prosper.
+
+### Borrower's Rate
+
+```{r, plot_borrower_rate}
+ggplot(prosper_36,
+       aes(borrower_rate))+
+  geom_freqpoly(boundary = 0, 
+                 binwidth = 0.02,
+                 color = "black")+
+  facet_wrap(~loan_origination_period)+
+  theme_economist()+
+  xlab("Borrower Rate")+
+  ylab("Count")+
+  theme(legend.position = "none")
+```
+```{r, summary_borrower_rate}
+by(prosper_36$borrower_rate, prosper_36$loan_origination_period, summary)
+```
+
+Despite the minimum credit score requirement in Prosper 2.0, borrower's rate seems to be slightly higher in this period than it was in Prosper 1.0. Notice that median, mean, and third quartile of borrower's rate were higher in Prosper 2.0, although the maximums stayed the same in both periods at 0.36. We can also see from the graph, that the highest spike in Prosper 2.0 is around the 0.31 rate, while in Prosper 1.0 it is around the 0.15 value. Interestingly, the minimum borrower's rate in Prosper 1.0 is at 0. I wonder how that's even possible. Additionally, on the graph, notice that there are several other spikes in both graphs, such as around 0.25, 0.29, 0.35 in Prosper 1.0 and around 0.19 in Prosper 2.0 . I wonder whether these spikes indicate additional concentration points of borrower rate due to different risk levels. Unfortunately, I will not be able to confirm it through this graph only. Though simply by adding the risk level variable to the graph's aesthetic, surely will bring a better insight into this matter.
+
+### Borrower's State
+
+Below are the maps showing loan origination count in each states for each periods:
+```{r fig.height=4, plot_state}
+# Map the 2 letter abbrievations to their full name
+prosper_36$state_full_name <- 
+  tolower(state.name[match(prosper_36$borrower_state, state.abb)])
+
+us <- map_data("state")
+states <- data.frame(state.center, state.abb)
+
+# Group by stateName
+loan_count_by_state <- prosper_36 %>%
+  group_by(loan_origination_period, state_full_name) %>%
+  summarise(count = n())
+
+ggplot() + 
+  geom_map(data = us, map = us,
+            aes(x = long, y = lat, map_id = region, label = region),
+            size=0.15) +
+  geom_map(data = na.omit(loan_count_by_state), map=us,
+            aes(fill = count, map_id = state_full_name),
+            color = "#ffffff", size = 0.15) +
+  geom_text(data = states, 
+            aes(x = x, y = y, label = state.abb, group = NULL), size = 2)+
+  scale_fill_continuous() +
+  coord_map("albers", lat0 = 39, lat1 = 45) +
+  facet_wrap(~loan_origination_period)+
+  theme_economist()+
+  theme(legend.position = "right",
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.line.x = element_blank())+
+  labs(title="Loan Origination Count by State")
+```
+I would like to say that the maps above look elegant, unfortunately, it is kind of hard to recognize the order of the states by its loan count. I do notice that California was the state with the highest loan count for both periods, but I can barely say which state came second. Therefore, I decided to just list the order here:
+```{r, print_loan_count_by_state_prosper_1}
+print.data.frame(
+  head(loan_count_by_state %>%
+       filter(loan_origination_period == "Prosper 1.0",
+              !is.na(state_full_name)) %>%
+       arrange(desc(count))))
+```
+
+```{r, print_loan_count_by_state_prosper_2}
+print.data.frame(
+  head(loan_count_by_state %>%
+       filter(loan_origination_period == "Prosper 2.0",
+              !is.na(state_full_name)) %>%
+       arrange(desc(count))))
+```
+
+It's clear now that Georgia was the state with the second highest loan count in the first period, but New York took the spot in the second period. Georgia wasn't even in the top six list in Prosper 2.0, while New York wasn't in the top six list in Prosper 1.0. However, five other states with highest loan count in the first period all made it into the same list in later period, though not in the same order. Very interesting indeed. I wonder what cause the shift in these lists? I think this would be an interesting topic to follow through, but not the one that I would like to pursue in this EDA. Therefore, I just have to settle with the knowledge that California holds the highest loan count, which is reasonable since it is the state where the company was founded and is headquartered. 
+
+### Borrower's Occupation
+
+Note that: since borrower's occupation that was listed as "other" dominates the rest occupation type in loan count, I decided to removed it from the histogram to better display the distribution of borrower's true occupations.
+
+```{r fig.height=8, plot_occupation}
+ggplot(subset(prosper_36,
+              prosper_36$occupation != "Other"),
+       aes(occupation))+
+  geom_bar(fill = "#1f78b4")+
+  facet_wrap(~loan_origination_period, nrow = 2)+
+  theme_economist()+
+  xlab("Occupation")+
+  ylab("Count")+
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+As we can see, there are a large variety of borrower's occupation. It includes waiter/waitress, truck drivers, religious, pilot, attorney, accountant/CPA, etc. Unfortunately, the vast majority of borrowers prefer to hide their occupation by selecting "other", making it hard to get a meaningful insight about the real distribution of borrower occupation. Nonetheless, here are the top six occupations by loan count:
+
+```{r, reshape_occupation_by_period}
+occupation_by_period <- prosper_36 %>%
+  group_by(loan_origination_period, occupation) %>%
+  summarise(count = n())
+```
+
+```{r, print_occupation_by_period_prosper_1}
+print.data.frame(
+  head(occupation_by_period %>%
+       filter(loan_origination_period == "Prosper 1.0") %>%
+       arrange(desc(count))))
+```
+
+```{r, print_occupation_by_period_prosper_2}
+print.data.frame(
+  head(occupation_by_period %>%
+       filter(loan_origination_period == "Prosper 2.0") %>%
+       arrange(desc(count))))
+```
+
+Notice how "other" and "" (blank) are at the first and third position on the Prosper 1.0 list. The blank occupation doesn't appear on the Prosper 2.0 list, which is an improvement and could be another sign of stricter requirements imposed in Prosper 2.0. 
+
+Moreover, notice that Professional and Computer Programmer are on both lists. Since California is the state with most loan count and is known for its technology companies, could most of these professionals and computer programmers be indeed from California? This surely is an interesting point to check. Furthermore, notice how Sales - Commission and Clerical jobs are listed as the top six on the first list, but both are missing in the second list; while Executive, Teacher, and Administrative Assistant, that are not in the first list, emerge into the second list. Could these shifts  have any relation to the shift in borrower's state that we've seen earlier? 
+
+Unfortunately, we can barely rely on the analysis above because of the very high proportion of occupation listed as "other" and "" that could masked the true distribution of borrower's occupation. 
+
+### Borrower's Income Range
+
+```{r, plot_income_range}
+ggplot(subset(prosper_36,
+              prosper_36$income_range != "Not displayed"),
+       aes(income_range,
+           fill = loan_origination_period))+
+  geom_bar(position = "dodge")+
+  scale_fill_manual(values = c("#d95f02", "#1f78b4"))+
+  theme_economist()+
+  labs(fill = "Origination Period")+
+  xlab("Income Range")+
+  ylab("Count")+
+  theme(legend.position = "right")
+```
+```{r, summary_income_range}
+by(prosper_36$income_range, prosper_36$loan_origination_period, summary)
+```
+
+In Prosper 1.0, income range with the highest loan count is $25,000 - $49,999, with 7,983 count, and the second highest is $50,000 - $74,999, with 5,384 count. Both income ranges scored as the first and second in Prosper 2.0 too, with 17,462 and 17,253 count respectively. Notice that there's only about 200 loan count different between the two ranges in the later period, but there was about 2,500 loan count different between them in earlier period. Earlier in borrower's occupation section, we've seen the emergence of executive borrowers, and the loss of clerical and sales jobs. I wonder whether this shift in borrower's occupation from lower to higher paying jobs might explain the increase in borrower's income range. But again, we can't say for sure right now without further research. 
+
+### Listing Category
+```{r, fig.height=8, plot_listing_category}
+p1 <- ggplot(prosper_36 %>%
+               filter(prosper_36$loan_origination_period == "Prosper 1.0"),
+             aes(listing_category))+
+  geom_bar(fill="#1f78b4")+
+  theme_economist()+
+  xlab("Listing Category")+
+  ylab("Count")+
+  labs(title = "Prosper 1.0")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+p2 <- ggplot(subset(prosper_36 %>%
+                    filter(loan_origination_period == "Prosper 2.0")),
+             aes(listing_category))+
+  geom_bar(fill="#1f78b4")+
+  xlab("Listing Category")+
+  ylab("Count")+
+  labs(title = "Prosper 2.0")+
+  theme_economist()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+grid.arrange(p1, p2, nrow =2)
+```
+
+In Prosper 1.0, most loans did not even have a listing category posted on them. Additionally, there were only seven categories listed during that time, with Debt Consolidation posted most frequently. In Prosper 2.0, though, all loans have a listing category, and many new categories were added to the list. Debt Consolidation is still ranked first as a category with the highest loan count. 
+
+Here are six categories, ordered by loan count from high to low for Prosper 1.0 and Prosper 2.0:
+```{r, reshape_category_by_period}
+category_by_period <- prosper_36 %>%
+  group_by(loan_origination_period, listing_category) %>%
+  summarise(count = n())
+```
+```{r, print_category_by_period_prosper_1}
+print.data.frame(
+  head(category_by_period %>%
+       filter(loan_origination_period == "Prosper 1.0") %>%
+       arrange(desc(count))))
+```
+
+```{r, print_category_by_period_prosper_2}
+print.data.frame(
+  head(category_by_period %>%
+       filter(loan_origination_period == "Prosper 2.0") %>%
+       arrange(desc(count))))
+```
+
+Once again, we observed an indication of stricter loan application process during Prosper 2.0 through the absence of "NA" value in loan category. However, borrowers still have an option to avoid stating the purpose of their loan by selecting "others" instead.
+
+### Loan Status
+
+```{r, reshape_loan_status_group}
+# This is just another loan status grouped in broader criteria.
+prosper_36 <- 
+  prosper_36 %>%
+  mutate(loan_status_group = ifelse(loan_status %in%
+                                      c("Defaulted", "Chargedoff"), 0,
+                                    ifelse(loan_status %in%
+                                      c("Current", "FinalPaymentInProgress"), 2,
+                                    ifelse(loan_status %in%
+                                      c("Completed"),3,
+                                    1))))
+
+prosper_36$loan_status_group <- factor(prosper_36$loan_status_group, 
+                                       levels = 0:3,
+                                       labels = c("Defaulted",
+                                                  "Past Due",
+                                                  "Current",
+                                                  "Completed"))
+```
+
+For simplicity, note that I have regrouped loan status into four, namely: Defaulted, Past Due, Current, and Completed. Defaulted consists of defaulted and charged off loans, Past Due consists of all past due loans, Current consists of current and final payment in progress, and finally Completed consist only of completed loans.
+
+```{r, fig.width=10, plot_loan_status_group}
+ggplot(prosper_36,
+       aes(loan_status_group,
+           fill = loan_origination_period))+
+  geom_bar(position = "dodge")+
+  scale_fill_manual(values = c("#d95f02", "#1f78b4"))+
+  theme_economist()+
+  labs(fill = "Origination Period")+
+  xlab("Loan Status")+
+  ylab("Count")+
+  theme(legend.position = "right")
+```
+
+As expected, all loans in Prosper 1.0, which should all be older than 36-month old, have been matured and either completed or defaulted. On the contrary, most loans in Prosper 2.0, which could still be less than 36-month old, were still current.
+
+```{r, reshape_loan_count_by_status}
+loan_count_by_status <- 
+  prosper_36 %>%
+  group_by(loan_origination_period, loan_status_group) %>%
+  summarise(count = n())
+```
+
+```{r, summary_loan_status}
+print.data.frame(
+  spread(select(loan_count_by_status, 
+              loan_origination_period, 
+              loan_status_group, 
+              count),
+       loan_status_group, 
+       count,
+       fill=0))
+```
+
+As expected, there is no current loan from Prosper 1.0 because all loans from this period have matured and were closed. Interestingly, 37% loans (10,395 count) from this period ended up as defaulted loans, which is bad for the company and its investors. Fortunately, there is only 8% defaulted loans (4,985 count) for Prosper 2.0, and 2% loans were past due (1,373 count). However, since the bulk of the loans (62%, 36,544 count) were still current, the number of defaulted and past due might still increased over time. We will come back to this later.
+
+### Closed Loans
+
+Now is the time to look at closed loans, those that have been either completed or defaulted, and analyzed their return on investment and loss rate. Since some loans in 2011 and later years were still current, I will focus my analysis on loans prior to 2011.
+
+```{r, add_dataframe_closed_loan}
+# select only loans originated before 2011
+prosper_36_closed <- subset(prosper_36,
+                            prosper_36$loan_origination_year < 2011)
+# select only loans that have been closed
+prosper_36_closed <- prosper_36_closed %>%
+  filter(!is.na(prosper_36_closed$closed_date))
+```
+
+#### Return on Investment
+
+The formula to calculate the Return on Investment (RoI) in this analysis is simple. It is the percentage of lender's yield to the original loan amount. Here's the frequency polygon of the RoI:
+
+```{r, plot_return_on_investment}
+ggplot(prosper_36_closed,
+       aes(return_on_investment))+
+  geom_freqpoly(binwidth = .10, 
+                 boundary = 0,
+                 color = "black")+
+  facet_wrap(~loan_origination_period)+
+  xlab("Return on Investment")+
+  ylab("Count")+
+  theme_economist()
+```
+```{r, display_return_on_investment_summary}
+by(prosper_36_closed$return_on_investment, 
+   prosper_36_closed$loan_origination_period, 
+   summary)
+```
+
+Notice that the first quartile of RoI in Prosper 1.0 is negative (-32.03), meaning more than 25% loans suffer a loss. Worst still, the distribution shows highest loan count for negative RoIs occurs in the -80% to -90% range value, which means most of those who did suffer a loss, lost almost their entire investment money. Furthermore, for those who profit from Prosper 1.0, their RoIs were concentrated in the 10% - 20% range.
+
+In Prosper 2.0, the graph suggests an improvement in loan performance, though it is hardly a definitive conclusion due to a low annual loan origination count in the early years of this period. Still, less than 25% loans have negative RoI, and the distribution of negative RoI shows no concentration of loans in a certain negative range. However, highest loan count for positive RoI still remains in the 10% - 20% range as in previous period.
+
+#### Loss Rate
+
+Loss Rate is another mean to measure loan performance. The formula used in this EDA is a net loss on principal divided by loan original amount. Here is the histogram of Loss Rate:
+
+```{r, plot_loss_rate}
+ggplot(prosper_36_closed %>%
+         filter(loss_rate > 0),
+       aes(loss_rate))+
+  geom_histogram(boundary = 0, 
+                 binwidth = .10,
+                 fill = "#1f78b4",
+                 color = "black")+
+  xlab("Loss Rate")+
+  ylab("Count")+
+  facet_wrap(~loan_origination_period)+
+  theme_economist()
+
+```
+
+```{r, summary_loss_rate}
+# filter for loans with loss rate higher than zero
+prosper_36_loss <- prosper_36_closed %>%
+  filter(loss_rate > 0)
+
+by(prosper_36_loss$loss_rate, prosper_36_loss$loan_origination_period, summary)
+```
+
+Note that the graph only shows positive loss.
+
+Clearly, in Prosper 1.0, we see a higher concentration of loans with higher loss rate, while in Prosper 2.0, we observe a more distributed loss rate. Notice how these graphs resemble the RoI graphs for their negative part, in the opposite order. Remember how negative RoI in Prosper 1.0 increased in loan count from the 0% to -100% range, but here, loss rate increased in loan count from 0% to 100%. Obviously, a negative RoI correspond to a positive loss rate.
+
+## Bivariate Data Analysis
+
+### Loan Term
+
+Earlier we've seen the histogram of total annual loan count from all three terms. Since we are now only focusing on the 36-month loans, it would be a good idea to take a look at the histogram again, and see the composition of loan count based on loan term:
+
+```{r, plot_loan_by_term}
+ggplot(prosper,
+       aes(loan_origination_year,
+           fill = term))+
+  geom_bar()+
+  scale_fill_manual(values = c("#023858", "#1f78b4", "#74a9cf"))+
+  scale_y_continuous()+
+  xlab("Origination Year")+
+  ylab("Count")+
+  theme_economist()+
+  theme(legend.position = "right")
+```
+
+```{r}
+loan_count_by_term <- 
+  prosper %>%
+  group_by(loan_origination_year,
+           term) %>%
+  summarise(count = n())
+
+print.data.frame(
+  spread(loan_count_by_term,
+         loan_origination_year, 
+         count,
+         fill = 0))
+```
+
+We've analysed earlier that Prosper started their business in 2006 offering the 36-month loan exclusively. We also know now that Prosper went into a quite period between late 2008 and mid 2009, and that upon it's return, Prosper imposed a minimum credit score requirement. Now, we can see from the histogram and summary table above, that in 2009 and 2010, Prosper still far too short on its annual loan original count from the previous record, which was reached in 2008 with 11,551 count. Could this be an indication of Prosper losing borrowers due to its new minimum credit score requirement?  
+
+Nonetheless, the data suggest that the 12-month and 60-month loans options were not available until Nov 2010; indicating a possibility of an effort on behalf of the company to attract more borrowers by providing choices in loan terms. Noticeably, though annual loan count on the 36-month did not reach a new record until 2012 (12,516 count), total annual loan count in 2011 from all three terms was just shy of the 2008 record, suggesting that the availability of option might have actually worked on attracting more customers.
+
+### Average Credit Score Vs Risk Level
+
+Since borrower's credit score is known to impact his/her credit rating, let us see whether the minimum average credit score requirement, imposed in Prosper 2.0, has an impact in the determination of borrowers Risk Level:
+
+```{r, plot_average_credit_score_by_risk_level}
+ggplot(prosper_36 %>%
+         filter(average_credit_score > 400),
+       aes(x = risk_level,
+           y = average_credit_score))+
+  geom_boxplot()+
+  facet_wrap(~loan_origination_period)+
+  xlab("Risk Level")+
+  ylab("Average Credit Score")+
+  theme_economist()
+```
+
+What an interesting finding! We could instantly see the different patterns shown on the graphs. First thing first, notice that the graphs confirms the minimum average credit score in Prosper 2.0 is indeed higher than 600 for each Risk Levels.
+
+Now, notice the stair steps appearance of boxplots in Prosper 1.0. Moreover, notice that their interquartile ranges do not overlap with each others. Clearly, the graph shows a nicely defined linear relationship between average credit score and risk level. As expected, a higher average credit score relates to a better risk level. 
+
+Conversely, boxplots in Prosper 2.0 suggest a weaker and less defined relationship between the two variables. Even a few borrowers with an average credit score higher than 800, were considered as a higher risk borrower in this period, when they would have been grouped as a lowest risk borrower in earlier period. In fact, since all borrowers in Prosper 2.0 have an average score higher than 600, they should have been at least in group D, if we were to follow the relationship suggested from Prosper 1.0 boxplots. Obviously, a major change in the determination of risk level was introduced after July 2009, such that: not only does it take a minimum average credit score, but it also take other factors into consideration.
+
+### Borrower's Rate
+
+Now let's explore the borrower's rate. First we will see its relationship with average credit score:
+
+```{r, plot_borrower_rate_vs_average_credit_score}
+ggplot(prosper_36 %>%
+         filter(average_credit_score > 400),
+       aes(x = average_credit_score,
+           y = borrower_rate))+
+  geom_point(alpha = .05)+
+  geom_smooth(method = lm)+
+  xlab("Average Credit Score")+
+  ylab("Borrower Rate")+
+  facet_wrap(~loan_origination_period)+
+  theme_economist()
+```
+
+Despite overplotting, there seems to be a linear relationship between borrower's rate and average credit score, noticeably in Prosper 1.0. Higher scores appear to correlate with lower rates, though high variability does seem to exist. The relationship also seem to hold for Prosper 2.0. 
+
+Now let us see the relationship between borrower's rate and risk level:
+```{r, plot_borrower_rate_by_risk_level}
+ggplot(prosper_36,
+       aes(x = risk_level,
+           y = borrower_rate))+
+  geom_boxplot()+
+  facet_wrap(~loan_origination_period)+
+  xlab("Risk Level")+
+  ylab("Borrower Rate")+
+  theme_economist()
+```
+
+Here we can see that in both periods, despite the high variability within each risk group, higher risk borrowers does appear to have a higher rate. Prosper 2.0 however, has a lower variability within each risk group with no overlap between each interquartile range and smaller range in general; suggesting a better defined relationship between Borrower Rate and Risk Level. We will come back to this later in the multivariate analysis for a deeper insight. 
+
+Then, let us see the relationship between Borrower Rate and Loan Original Amount:
+
+```{r, plot_borrower_rate_by_loan_amount}
+ggplot(prosper_36,
+       aes(x = loan_original_amount,
+           y = borrower_rate))+
+  geom_point(alpha = .1)+
+  facet_wrap(~loan_origination_period)+
+  theme_economist()+
+  xlab("Loan Original Amount")+
+  ylab("Borrower Rate")
+```
+
+Despite overplotting, notice that on the plot for Prosper 1.0, some smaller loans did manage to get a lower rate than bigger loans. In this case, we can say that bigger loans got higher rates. However, we do not see the smaller loans getting better rate from the Prosper 2.0 plot. On the contrary, many smaller loans have a higher rates than bigger loans in this period. I wonder whether loan original amount did actually affect the borrower's rate. We will come back to this again in multivariate data analysis.
+
+### Loan Performance
+
+First, let us see the delinquency rate time series:
+```{r, reshape_delinquency_by_year}
+delinquency_by_year <-
+  prosper_36 %>%
+  filter(average_credit_score > 0)%>%
+  group_by(loan_origination_year, loan_status_group) %>%
+  summarise(count = n()) %>%
+  group_by(loan_origination_year) %>%
+  mutate(percentage = round(count/sum(count), digits=2)) %>%
+  filter(loan_status_group == "Defaulted") %>%
+  mutate(date = as.Date(paste("01-01-", loan_origination_year, sep =""),
+                        format = "%d-%m-%Y"))
+```
+
+```{r, plot_delinquency_by_year}
+ggplot(delinquency_by_year, 
+       aes(x = date, 
+           y = percentage))+ 
+  geom_point(shape=1)+
+  geom_smooth(method=lm)+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Delinquency Rate")
+```
+
+Notice that in general, delinquency rate has gone down over the year as shown by the linear model on the graph, which is an indication of an improvement on loan performance. Also notice how high the delinquency rates was in 2006. It only went down slightly from 0.40 to 0.39, and then to 0.33 in the next two years respectively. In 2009, when Prosper started to imposed minimum average credit score, delinquency rate dipped to 0.15, and went only slighly higher to 0.17 in the next year. In 2011, delinquency rate went up again to 0.20 before it went back down in the next two years. It is worth to mention though that there were still a bunch of active loans from 2011 foward, thus delinquency rates for these years might still go even higher. Therefore, I expect the slope of the linear model to be less than it is shown on the graph once the active loans have all matured and we got the final delinquency rates. 
+
+Now, let us see the other aspect of loan performance, the Return on Investment:
+```{r, reshape_return_on_investment_by_year}
+roi_by_year <-
+  prosper_36_closed %>%
+  group_by(loan_origination_year) %>%
+  summarise(mean_roi = mean(return_on_investment))%>%
+  mutate(date = as.Date(paste("01-01-", loan_origination_year, sep =""),
+                        format = "%d-%m-%Y"))
+```
+
+```{r, plot_return_on_investment_by_year}
+p1 <- ggplot(roi_by_year,
+             aes(x = date,
+                 y = mean_roi))+
+  geom_point(shape=1)+
+  geom_smooth(method=lm)+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Mean RoI")
+
+p2 <- ggplot(prosper_36_closed,
+             aes(x = loan_origination_year,
+                 y = return_on_investment))+
+  theme_economist()+
+  geom_violin()+
+  stat_summary(fun.y = median, geom = "point")+
+  xlab("Origination Year")+
+  ylab("RoI")
+
+grid.arrange(p1, p2, nrow = 2)
+```
+```{r, summary_roi_by_year}
+by(prosper_36_closed$return_on_investment, 
+   prosper_36_closed$loan_origination_year, 
+   summary)
+```
+
+Notice that in general, mean RoI has gone up over the year, which is another indication of improving loan performance. Also notice that for three years before 2009, the annual mean RoI were below zero, and almost half ot the loans suffered negative return on investment annually. However, only less than a quarter of loans suffered the negative RoI in 2009 and 2010.
+
+Furthermore, look at the distribution of RoI on the violin plots for each years. Notice how the proportion of the negative RoI has reduced over the year, suggesting a favorable change in loan performance.
+
+Now, let us take a look at loss rate:
+```{r, reshape_loss_rate_by_year}
+loss_rate_by_year <-
+  prosper_36_closed %>%
+  filter(loss_rate > 0) %>%
+  group_by(loan_origination_year) %>%
+  summarise(mean_loss_rate = mean(loss_rate))%>%
+  mutate(date = as.Date(paste("01-01-", loan_origination_year, sep =""),
+                        format = "%d-%m-%Y"))
+```
+
+```{r, plot_loss_rate_by_year}
+p1 <- ggplot(loss_rate_by_year,
+             aes(x = date,
+                 y = mean_loss_rate))+
+  geom_point(shape=1)+
+  geom_smooth(method=lm)+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Mean Loss Rate")
+
+p2 <- ggplot(prosper_36_closed %>%
+               filter(loss_rate >0),
+             aes(x = loan_origination_year,
+                 y = loss_rate))+
+  theme_economist()+
+  geom_violin()+
+  stat_summary(fun.y = median, geom = "point")+
+  xlab("Origination Year")+
+  ylab("Loss Rate")
+
+grid.arrange(p1, p2, nrow = 2)
+```
+
+Note that only loans with loss rate higher than zero are counted in this graph. 
+
+In general, mean loss rate went only slighly down from 2006 to 2010. The distributions of loss rate as they were shown on violin plots above do not seem to change much, except that the peaks seem to occur on a lower value at a later plot and that the bottom of the plot seem to be wider in 2009.
+
+Based on our analysis on delinquency rate, RoI, and loss rate above, we can say that loan performance does seem get better over the year. However, this conclusion is far from definitive since delinquency rates for the last three years after 2010 might still went even higher, and we don't have the RoI and loss rate for these last three years to put into our consideration.
+
+## Multivariate Data Analysis
+
+### Delinquency Rate
+
+To get a better insight about delinquency rate, let see the trend within risk levels:
+```{r, reshape_delinquency_by_status}
+delinquency_by_status <-
+  prosper_36 %>%
+  filter(average_credit_score > 0)%>%
+  group_by(loan_origination_year, risk_level, loan_status_group) %>%
+  summarise(count = n()) %>%
+  group_by(loan_origination_year, risk_level) %>%
+  mutate(percentage = round(count/sum(count), digits=2)) %>%
+  filter(loan_status_group == "Defaulted")%>%
+  mutate(date = as.Date(paste("01-01-", loan_origination_year, sep =""),
+                        format = "%d-%m-%Y"))
+```
+
+```{r, plot_delinquency_by_status}
+ggplot(delinquency_by_status, 
+       aes(x=date, 
+           y=percentage, 
+           color = risk_level)) +
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  geom_line(aes(group = risk_level))+
+  geom_point()+ 
+  stat_summary(aes(group = 1),
+               fun.y = mean,
+               geom = "line", 
+               linetype = "dashed",
+               alpha = .5, 
+               lwd = 1.5)+
+  theme_economist()+
+  labs(color = "Risk Level")+
+  xlab("Origination Year")+
+  ylab("Delinquency Rate")+
+  theme(legend.position = "right")
+```
+
+It turned out, as expected, loans a in higher risk group have a higher delinquency rate, except in a few cases such as in 2011 when the delinquency rate of HR group was slightly lower than E's. Delinquency rates were more spread out in a wide range, covering the higher rate, in the three earlier years; but they were more cramped together in the lower and smaller range from 2009 onward. 
+
+Remember our analysis about average credit score: that since 2009, Prosper was no longer giving a loan for borrower with a credit score of less than 600, which correspond to credit score range for those in group E or HR in Prosper 1.0. Now, look at how high the delinquency rates for higher risk loans (grade E and HR) prior to 2009 were. No wonder why Prosper 2.0 started to implement the minimum average credit score in the first place. Seemingly, they hoped to get rid of higher delinquency rates in the E and HR group they had in Prosper 1.0. Surely, the maneuver seems to work, as we can see that delinquency rates have dropped and stayed well below 0.40 since 2009.
+
+### Borrower's Rate
+
+Now let us see the relationship between borrower's rate and the risk level:
+```{r fig.height=5, plot_borrower_rate_by_risk_level_yearly}
+ggplot(prosper_36,
+       aes(x = risk_level,
+           y = borrower_rate))+
+  geom_boxplot()+
+  facet_wrap(~loan_origination_year)+
+  xlab("Risk Level")+
+  ylab("Borrower Rate")+
+  theme_economist()
+```
+
+In general, borrower's rate for a higher risk loan seems to be higher than those of lower risk loans. However, we can see higher variability and more outliers on boxplots prior to 2011. The apparent changes on boxplots from 2011 onward directed me toward another online research. I found out that Prosper used to have an auction style model to determine the interest rate of their loan, but they [stopped using this model](https://www.americanbanker.com/news/prosper-ditches-auction-pricing-for-model-like-p-to-p-rivals) at the end of 2010, and started setting the rate based on the borrower's risk level instead. Thus, that explains not only the high variability in rates prior to 2011, with some higher risk borrowers managed to get a lower rate while some lower risk borrowers unfortunately get a higher rate, but also the nicely defined linear relationship between Borrower Rate and Risk Level in 2011 and later, with lower risk relates to lower rate.
+
+Now let us see a more complicated relationship between borrower's rate, risk level, and average credit score:
+```{r, plot_borrower_rate_vs_average_credit_score_by_risk_level}
+ggplot(prosper_36 %>%
+         filter(average_credit_score > 350),
+       aes(x = average_credit_score,
+           y = borrower_rate,
+           color = as.numeric(risk_level)))+
+  scale_color_distiller(type ="div", 
+                        palette = "RdYlGn",
+                        trans = "reverse",
+                        name = "Risk Level",
+                        breaks = c(1,2,3,4,5,6,7),
+                        labels = c("HR", "E", "D", "C", "B", "A", "AA"))+  
+  geom_point(alpha = .5)+
+  facet_wrap(~loan_origination_year, nrow = 3)+
+  xlab("Average Credit Score")+
+  ylab("Borrower Rate")+
+  theme_economist()+
+  theme(legend.position = "right")
+```
+Note that only loans with an average credit score higher than 350 are shown in this plot.
+
+What an interesting time series plots that we have here! These plots provide us with a valuable insight into the history of Prosper borrower's rate. Notice how the vertical color pattern in graphs before 2009 changed into horizontal color patterns in graphs from 2011 onward. Clearly, this graph should be one of my final plot. I will elaborate more on the findings in the final plots section.
+
+Furthermore, let us see the relationship between borrower's rate, loan original amount, and risk level. Remember earlier in bivariate analysis, we've tried to plot the borrower's rate vs loan original amount, but we didn't gain much insight from it due to overplotting. So, let see whether adding risk level to the plot, might help:
+```{r, plot_borrower_rate_vs_loan_original_amoount_by_risk_level}
+ggplot(prosper_36,
+       aes(x = loan_original_amount,
+           y = borrower_rate,
+           color = as.numeric(risk_level)))+
+  scale_color_distiller(type ="div", 
+                        palette = "RdYlGn",
+                        trans = "reverse",
+                        name = "Risk Level",
+                        breaks = c(1,2,3,4,5,6,7),
+                        labels = c("HR", "E", "D", "C", "B", "A", "AA"))+  
+  geom_point(alpha = .5)+
+  facet_wrap(~loan_origination_year, nrow = 3)+
+  xlab("Loan Original Amount")+
+  ylab("Borrower")+
+  theme_economist()+
+  theme(legend.position = "right")
+```
+
+Undoubtedly, there are many Prosper's moments depicted in this time series. One thing in common throughout the years is that lower risk loans seemed to have a lower rate, although the rates for loans prior to 2011 do not have clear cut range between each risk levels as loans from the 2011 and after do. Obviously, this is another indication of a different rate determination method, namely auction style loans and non-auction (regular) ones. 
+
+Moreover, I also observe that prior to 2011, bigger loans do seem to have a higher rate, even for loans from the same risk level. However, that is not the case from 2011 onward. In this later periods, each risk level seemed to have a pre-determined borrower's rate, and loan amount doesn't seem to affect the rate. 
+
+Then, I noticed the steps appearence on the graph from 2011 onward, indicating a possible maximum loan amount allowed for each risk levels. For example, in 2013 and 2014, only borrowers in grade B or higher could get a loan higher than $25,000, and only borrowers in grade C or higher could get a loan higher than $15,000. Maximum loan amount in each risk levels has changed over the year which can clearly be seen from the graph above.
+
+Based on our analysis on borrower's rate above, I would say that, in a borrower's perspective, getting a loan from Prosper prior to the quite period is easier than getting one after it. For one, in Prosper 2.0, you have to have a minimum credit score of 600 to begin with, and then, since Prosper has stopped auctioning loan rates, borrowers in higher risk groups can no longer get a lower interest rate deal. However, if you are a borrower with an excellent credit score and a lower risk level (as determined by the company), you surely will get a better deal in Prosper 2.0 than you would in Prosper 1.0, especially when need to borrower a larger amount of money.  
+
+### Loan Performance
+
+As a start, I would like to see the relationship between return on investment (RoI) and delinquency rate by risk level:
+
+```{r, reshape_mean_roi}
+credit_score_by_grade <-
+  prosper_36 %>%
+  filter(average_credit_score > 0)%>%
+  group_by(loan_origination_year, risk_level) %>%
+  summarise(total = n(),
+            mean_roi = round(mean(return_on_investment), digits = 2))
+
+loan_delinquency <- full_join(delinquency_by_status, 
+                             credit_score_by_grade, 
+                             by = c("loan_origination_year", "risk_level"))
+```
+
+```{r, plot_return_on_investment_vs_delinquency_rate}
+ggplot(loan_delinquency %>%
+         filter(loan_origination_year < 2011),
+       aes(x = percentage,
+           y = mean_roi,
+           color = risk_level,
+           size = total))+
+  geom_point()+
+  facet_wrap(~loan_origination_year, nrow = 3)+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  labs(color = "Risk Level",
+       size = "Loan Count")+
+  xlab("Delinquency Rate")+
+  ylab("Average Return on Investment")+
+  theme_economist()+
+  theme(legend.position = "right")
+```
+
+Notice how the relationship has changed over the year. In 2006, higher risk loans appear to have lower average RoI and higher delinquency rate; but in 2010, higher risk loans appear to have higher RoI, although they still have higher delinquency rate. Obviously, Prosper has managed to introduce some changes in its loan policy to alter the trend, so that a higher risk loan relate to a higher average RoI, which of course makes it more attractive to investors despite its high delinquency rate. Of course, for those who prefer better assurance, lower risk loans are always a choice with lower delinquency rate and lower average RoI. 
+
+Now let us see return on investment by risk levels in time series:
+```{r, reshape_return_on_investment_by_risk_level}
+roi_by_risk_level <-
+  prosper_36_closed %>%
+  group_by(loan_origination_year, risk_level) %>%
+  summarise(mean_roi = mean(return_on_investment),
+            median_roi = median(return_on_investment),
+            first_quartile = quantile(return_on_investment, 0.25),
+            third_quartile = quantile(return_on_investment, 0.75))%>%
+  mutate(date = as.Date(paste("01-01-", loan_origination_year, sep =""),
+                        format = "%d-%m-%Y"))
+```
+
+```{r, plot_return_on_investment_by_risk_level}
+p1 <- ggplot(roi_by_risk_level,
+       aes(x = date,
+           y = mean_roi,
+           color = risk_level))+
+  geom_point(shape = 1)+
+  geom_line(aes(group = risk_level))+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Mean RoI")+
+  theme(legend.position = "None")
+
+p2 <- ggplot(roi_by_risk_level,
+       aes(x = date,
+           y = median_roi,
+           color = risk_level))+
+  geom_point(shape = 1)+
+  geom_line(aes(group = risk_level))+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Median RoI")+
+  theme(legend.position = "right")
+
+grid.arrange(p1, p2, nrow = 1)
+```
+
+Look at the obvious negatively high mean and median RoI for HR risk level in 2006. It was not until 2008 when at least half of loans in this level produced a positive RoI, though the mean RoI was still in the negative side. Remember that E was the risk level with second highest delinquency rate in the first three years of Prosper 1.0. Surprisingly, the mean and median RoI suggests a far better performance in this risk level comparte to the mean and median RoI in HR risk level, except in 2010, when both mean and median RoI from HR risk level are higher than those from E risk level.
+
+Notice that after 2008 RoI on all risk levels seem to improve, and all of them finally scored a positive mean RoI. Surprisingly, lower risk levels have a better average RoI in both 2009 and 2010. 
+
+Let us now take a look at a similar graph, this one is for the loss rate:
+```{r, reshape_loss_rate_by_risk_level}
+loss_rate_risk_level <-
+  prosper_36_closed %>%
+  filter(loss_rate > 0) %>%
+  group_by(loan_origination_year, risk_level) %>%
+  summarise(mean_loss_rate = mean(loss_rate),
+            median_loss_rate = median(loss_rate))%>%
+  mutate(date = as.Date(paste("01-01-", loan_origination_year, sep =""),
+                        format = "%d-%m-%Y"))
+```
+
+```{r, plot_loss_rate_by_risk_level}
+p1 <- ggplot(loss_rate_risk_level,
+       aes(x = date,
+           y = mean_loss_rate,
+           color = risk_level))+
+  geom_point(shape = 1)+
+  geom_line(aes(group = risk_level))+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Mean Loss Rate")+
+  theme(legend.position = "None")
+
+p2 <- ggplot(loss_rate_risk_level,
+       aes(x = date,
+           y = median_loss_rate,
+           color = risk_level))+
+  geom_point(shape = 1)+
+  geom_line(aes(group = risk_level))+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Median Loss Rate")+
+  theme(legend.position = "right")
+
+grid.arrange(p1, p2, nrow = 1)
+```
+
+Look at all those crazy lines! Notice how the mean loss rate of loans in lower risk groups were trending up from 2006 to 2008, but Prosper managed to bring them down in 2009 and 2010. Furthermore, mean loss rate of loans in higher risk groups, in general, seem to go down slighly over the years. Also, notice that in the 2009 and 2010 periods, the lines seem to stays closer together in two groups, lines in reds, representing higher risk loans, stay in one group on higher range, while lines in greens, representing lower risk loans, stay in another group on lower range. 
+
+Based on the graph of median loss rate above, we can say that in 2009 and 2010, half loans from each lower risk levels (C to AA) that suffered a principal loss, have a loss rate lower than 0.68 (mostly well below the 0.6 mark); but half loans from each higher risk levels (HR to D) that suffered a principal loss, have a loss rate higher than 0.74.
+
+Now, let us see a plot between RoI and loan original amount, grouped by risk level:
+```{r, plot_return_on_investment_vs_loan_original_amount}
+ggplot(prosper_36_closed,
+       aes(x = loan_original_amount,
+           y = return_on_investment,
+           color = as.numeric(risk_level)))+
+  scale_color_distiller(type ="div", 
+                        palette = "RdYlGn",
+                        trans = "reverse",
+                        name = "Risk Level",
+                        breaks = c(1,2,3,4,5,6,7),
+                        labels = c("HR", "E", "D", "C", "B", "A", "AA"))+
+  geom_point(alpha = .5)+
+  facet_wrap(~loan_origination_year, nrow = 3)+
+  theme_economist()+
+  xlab("Loan Original Amount")+
+  ylab("Return on Investment")+
+  theme(legend.position = "right")
+```
+
+Unfortunately, there's not much we can see here, except that from 2006 to 2009 more and more lower risk loans with a higher loan original amount having a negative RoI but less so from 2009 to 2010. In general, there were less percentage of loans with negative RoI in 2009 and 2010 compared to earlier years despite the loan original amount and risk level.
+
+Here's a plot between loss rate and loan original amount, grouped by risk level:
+```{r, plot_loss_rate_vs_loan_original_amount}
+ggplot(prosper_36_closed %>%
+       filter(loss_rate > 0),
+       aes(x = loan_original_amount,
+           y = loss_rate,
+           color = as.numeric(risk_level)))+
+  scale_color_distiller(type ="div", 
+                        palette = "RdYlGn",
+                        trans = "reverse",
+                        name = "Risk Level",
+                        breaks = c(1,2,3,4,5,6,7),
+                        labels = c("HR", "E", "D", "C", "B", "A", "AA"))+
+  geom_point(alpha = .5)+
+  facet_wrap(~loan_origination_year, nrow=3)+
+  theme_economist()+
+  xlab("Loan Original Amount")+
+  ylab("Loss Rate")+
+  theme(legend.position = "right")
+```
+
+Notice that the plot only shows observations with a loss rate higher than zero. Again, due to overplotting, this plot is hard to interpret. However, we can still see that most of the loans with a loss rate higher than zero are from higher risk loans, and the most lower risk loans are seen on the plot for the 2008.
+
+After exploring delinquency rates, return on investment, and loss rate for each risk levels, I would say that, thinking as an investor, I will be more confident investing in Prosper 2.0 than I would in Prosper 1.0. For sure, I would have sticked to lower risk loans if I had to invest in earlier period, but I'm eager to diversify my investment into higher risk loans in Prosper 2.0 due to its attractively high RoI. 
+
+# Final Plots and Summary
+
+## Plot One
+
+```{r, plot_one}
+p1 <- ggplot(prosper_36 %>%
+               filter(loan_origination_year < 2014), 
+             aes(x=loan_origination_year,
+                 fill = factor(loan_status_group, 
+                               levels = rev(levels(loan_status_group))))) +
+  geom_bar()+
+  scale_fill_manual(values=c("#74a9cf", "#66c2a4", "#8c96c6", "#fc8d59"))+
+  theme_economist()+
+  ylab("Loan (count)")+
+  xlab("Loan Origination Year")+
+  theme(legend.position = "top")+
+  labs(title = "Prosper Annual Loan Origination Count and Delinquency Rate",
+       subtitle = "Loan Term: 36-month",
+       fill = "Loan Status Group")
+
+p2 <- ggplot(delinquency_by_status, 
+       aes(x=loan_origination_year, 
+           y=percentage, 
+           color = risk_level)) +
+  geom_point() +
+  geom_line(aes(group = risk_level))+
+  stat_summary(aes(loan_origination_year, percentage, col = "mean", group = 1),
+               fun.y=mean,
+               geom="line", 
+               linetype = "dashed",
+               color = "blue",
+               alpha = .5, 
+               lwd=1.5)+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  scale_y_continuous(labels = percent)+
+  labs(color = "Risk Level")+
+  theme_economist()+
+  theme(legend.justification = 'bottom', legend.position=c(0.95,0.11))+
+  ylab("Delinquency Rate") +
+  xlab("Loan Origination Year")
+
+grid.arrange(p1, p2, nrow = 2)
+```
+
+I chose this plot as my first final plot because it depicts a rather detailed story, not only about Prosper's performance on originating loans, but also the performance of their loans over the year based on risk level. Obviously, the histogram on top shows annual loan origination count, and the graph on the bottom shows delinquency rates on each risk levels. 
+
+As we've talked about earlier, Prosper opened its marketplace to the public in early 2006, in which, the young company managed to originate a little more than 5,000 loans. Unfortunately, only time revealed that around 40% of loans granted this year went into default. In the second year of their business, Prosper successfully granted more than 11,000 loans, a 100% increase on annual loan count from the previous year. Yet, still around 40% of these loans went into default. Then, in 2008, though they managed to originate about the same number of loans as in 2007, a trouble with the U.S. Security and Exchange Commission surfaced, which lead to the SEC serving Prosper with a cease and desist order later that year, barring it from granting new loans. On top of that, still more than 30% of loans originated in 2008 went into default.
+
+Prosper returned to business in mid 2009 after completing the required registration with the SEC. However, the company seemed to only be able to generate less than 2,500 loans in 2009 and a little more than 5,000 loans in 2010. Fortunately, they were able to keep delinquency rate well below the 25% mark in both years. Then, in 2011, Prosper still didn't manage to grant as many loans as it did before the cease and desist order, with only less than 10,000 originated that year.
+
+We've known from previous analysis about loan term, that some time in 2011, Prosper started to offer variation in loan terms, offering a 12 month and a 60 month loan, in addition to the old 36 month loan option. Looking at the low annual loan origination count since 2009, the introduction of variation in loan term could probably be a strategy to attract more borrowers. As we can see, annual loan origination count for the 36 month loan did increase in the following two years, it even surpassed the previous highest annual count set in 2008 (11,551 count). Considering additional loans originated for the 12 month and 60 month term, Prosper seemed to be growing even better in its annual total loan origination count. However, delinquency rate seemed to be creeping back up in 2011. Although it was still below the 25% mark, there were about 30% loans still current (active) by that time, posing a possibility of more defaulted loans. Similarly, it is hard to precisely predict delinquency rate for 2012 and 2013 since more than half of the loans were still active.
+
+Looking a little closer at delinquency rates based on risk level as shown in the bottom graph, we can see, as expected, that higher risk loans have a higher delinquency rate. However, if we look at the rate between 2006 to 2008, while delinquency rates for higher risk loans were trending slightly down, the rates for lower risk loans were in fact trending up. I expect that this trend played an important part in Prosper decision to have a minimum average credit score on new loans after the 2008 - 2009 quiet period. Moreover, with the increasing delinquency rate on lower risk loans between 2006 - 2008, suggesting that even higher credit score (the primary factor that affect Credit Grade) cannot guarantee that a borrower would not go into default, Prosper decided updated their method in determining the risk level of a loan by adding more factors into consideration.
+
+As we can see, the combination of minimum average credit score requirement and the new method in determining the risk level seemingly worked on reducing delinquency rate across risk levels (Prosper Rating). Unfortunately, delinquency rate of higher risk loans seemed to creep back up in 2011 with more than 25% loans were still active (current), though the rate was still well below 40% mark.
+
+## Plot Two
+
+```{r, plot_two}
+ggplot(prosper_36 %>%
+         filter(average_credit_score > 350),
+       aes(x = average_credit_score,
+           y = borrower_rate,
+           color = as.numeric(risk_level)))+
+  scale_color_distiller(type ="div", 
+                        palette = "RdYlGn",
+                        trans = "reverse",
+                        name = "Risk Level",
+                        breaks = c(1,2,3,4,5,6,7),
+                        labels = c("HR", "E", "D", "C", "B", "A", "AA"))+  
+  geom_point(alpha = .5)+
+  labs(title = "Prosper Borrower's Rate vs Average Credit Score by Risk Level",
+       subtitle = "Loan Term: 36-month",
+       color = "Risk Level")+
+  xlab("Average Credit Score")+
+  ylab("Borrower Rate")+
+  facet_wrap(~loan_origination_year, nrow = 3)+
+  theme_economist()+
+  theme(legend.position = "right")
+```
+
+I chose this graph as my second final plot because it tells a story in a sequential order about changes made by Prosper in regard to borrower's rate. On the first three graphs (2006 - 2009), we can see that each color, representing Risk Level, has a certain range on the x-axis, representing Average Credit Score, without overlapping each other range. This suggests that, during this time, risk level was determined primarily (if not solely) based on borrower's average credit score. Then, through the vertical pattern, we can see that each color has a long range on the y-axis, representing Borrower Rate, with higher risk loan having bigger range and lower risk loan having smaller and lower range. We can clearly see this pattern as a depiction of the auction-style model on loan rate used during this period. Furthermore, the lower bound on the x-axis on these graphs suggests that Prosper might not have a minimum credit score requirement until 2008, when they started to impose a minimum average credit score of 500. Probably, in its first two years, Prosper was still trying to attract borrower to its marketplace, and thought that the less requirement it had, the more inclined a prospective borrower to try their product.
+
+On the 2009 and 2010 graphs, the vertical pattern curiously ceased. We can clearly see that each Risk Level was no longer bound in a certain non-overlapping range, suggesting that Prosper had started using a new method on how to determine a Risk Level of a loan, which then no longer depend solely on the Average Credit Score as it previously did. Consequently, we see the vertical pattern blurred out as points in each Risk Level were no longer constrained in a certain credit score range. Additionally, lower bound on the Average Credit Score suggests an increase in minimum Average Credit Score requirement to 600, a reasonable move considering high delinquency rate on previous higher risk loans (Risk Level E and HR) as shown in final plot one.
+
+On the graphs after 2010, a horizontal pattern appeared, suggesting another changing in Prosper business model. This time, each color seemed to be bound in a certain range on the y-axis, the Borrower Rate, indicating that Prosper has ended the auction-style on loan rate and move into a more conventional approach of a predetermined rate based on Risk Level. Finally, the most current change is shown on the last graph, where the lower bound on the x-axis suggest another increase in minimum Average Credit Score requirement to 650.
+
+## Plot Three
+
+```{r, plot_three}
+p1 <- ggplot(prosper_36_closed,
+             aes(x = loan_origination_year,
+                 y = return_on_investment))+
+  geom_boxplot()+
+  geom_point(data = roi_by_year,
+             aes(x = loan_origination_year,
+                 y = mean_roi),
+             shape = 2,
+             color = "blue")+
+  theme_economist()+
+  labs(title = "Prosper Annual Return on Investment",
+       subtitle = "Loan Term: 36-month")+
+  xlab("Origination Year")+
+  ylab("RoI")
+
+p2 <- ggplot(roi_by_risk_level,
+       aes(x = date,
+           y = first_quartile,
+           color = risk_level))+
+  geom_point(shape = 1)+
+  geom_line(aes(group = risk_level))+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("First Quartile")+
+  labs(color = "Risk Level")+
+  theme(legend.position = "right")
+
+p3 <- ggplot(roi_by_risk_level,
+       aes(x = date,
+           y = median_roi,
+           color = risk_level))+
+  geom_point(shape = 1)+
+  geom_line(aes(group = risk_level))+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Median")+
+  labs(color = "Risk Level")+
+  theme(legend.position = "none")
+
+p4 <- ggplot(roi_by_risk_level,
+       aes(x = date,
+           y = third_quartile,
+           color = risk_level))+
+  geom_point(shape = 1)+
+  geom_line(aes(group = risk_level))+
+  scale_color_manual(values=c("#a50026", 
+                             "#d73027", 
+                             "#f46d43", 
+                             "#a6d96a",
+                             "#66bd63",
+                             "#1a9850",
+                             "#006837"))+
+  theme_economist()+
+  xlab("Origination Year")+
+  ylab("Third Quartile")+
+  labs(color = "Risk Level")+
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, p3, p4, nrow =2)
+```
+
+I chose this plot as the last final plot in this EDA because it offers an answer to my initial question about loan performance before and after the SEC registration period. The wide interquartile range, well into the negative value, on boxplots for 2006, 2007, and 2008 suggests more than a quarter of loans in these years suffered a negative RoI - quite a dissapointing loan performance. In fact, if we look at the first quartile plot on the top right, we can see that only loans in risk level A and AA performed better than general during this period, with less than a quarter of loans in these level suffered a negative RoI. Of course, as expected, the worst performance belongs to risk level HR, with more than half loans suffered a negative RoI, except in 2008.
+
+Fortunately for investors, Prosper has managed to improved the performance of loans originated after the quite period. Even better, those who were risking their money on higher risk loans (risk level D, E, or HR) seems to get higher return on their investment. In fact, if we look at the median and third- quartile plot, in 2009 and 2010, we can see that half loans in risk level D, E, or HR, in each of these years, have a better RoI than three-third of loans in risk level A, or AA in the same year. 
+
+However, there's a downside to this final plot: annual loan origination count in 2009 and 2010 were relatively low compare to annual count in earlier years. Then, the fact that delinquency rate for loans originated in 2011, where annual count were about the same as the 2007 and 2008 number, were up again after dipping to a lowest record in 2009, should make us less optimistic about the improvement suggested on the graph above. 
+
+# Reflections
+
+I cannot believe that I have finally reached this part of the project. Honestly, this Exploratory Data Analysis had taken more time, required more skills, and demanded more study, than I initially anticipated. Fortunately, I can proudly say that I enjoyed every twist and turn I found during the process.
+
+When I decided to choose the Prosper Loan Dataset, I know almost nothing about Prosper and Peer to Peer Lending platform. I know that I have to do some research to familiarize myself with the dataset, and generally set a focus for my EDA. However, I decided not to do so. Instead, I started to work on the wrangling process, and then proceed to the EDA straight away, hoping that the data will reveal something interesting for me to investigate. Interestingly, this approach works. I began to find hints from plots that lead me to interesting facts about the company, such as the quiet period between 2008 to 2009, and the fact that Prosper only started to offer 12-month and 60-month loans in 2011. Seriously, every time I found something about the company that stemmed from my analysis of the dataset, I felt triumphant and wanted to say "Ha! You can't hide from me, I gotcha!"
+
+Undoubtedly, there were many challenges that I had to face and overcome along the way, and overplotting was the biggest challenge of them all. It is especially true when I tried to look into the relationship between the borrower rate and the average credit score before and after the quiet period. Not until I added more variable, and faceted the graph, did I found the trend suggesting a constantly changing in the relationship between these variables over the years.
+
+Of course, not all initial findings can actually be pursued further. For example, I was excited to find a shift on the list of states with the highest loan count and also a shift on the list of occupations with the highest loan count. I wondered, could the fact that New York had emerged as the second state with the highest loan count after the quiet period, replacing Georgia who previously held the spot, had any relation to the rise of Executive job as the third occupation with the highest loan count? Unfortunately, it is impossible to draw a conclusion about this, since the majority of loans listed borrower's occupation as other or nothing listed at all, especially in the period before 2009, masking the true composition of borrower's occupation.
+
+As expected, a huge amount of trials and errors has become a part of this long journey, which mostly occurred in the visualization process as an effort to display complex relationships in a simple and easy-to-understand graphic. It is truly a humbling experience that makes me appreciate every work on data visualization even more, and from which I welcomed the idea that the ability to find relevant coding resources online goes a long way in helping me finish this project.
+
+Definitely, there are still many variables in the dataset that I have not explored and there is also outside competition aspect that I have not put into consideration in this EDA, that might enhance or even change the analysis and findings in this report. Furthermore, additional data from current years, and updated data for newly completed or defaulted loans, surely would help to better determine loan performance after the quiet period.
